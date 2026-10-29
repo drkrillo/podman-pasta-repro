@@ -1,0 +1,41 @@
+name: podman pasta repro
+on: workflow_dispatch
+permissions: {}
+
+jobs:
+  repro:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Environment
+        run: |
+          podman version
+          dpkg-query -W podman passt apparmor || true
+          ls /etc/apparmor.d | grep -iE 'podman|pasta' || echo 'no podman/pasta profiles'
+
+      - name: Repro A - rootless netns teardown
+        run: podman unshare --rootless-netns true
+
+      - name: Repro B - container on a bridge network
+        if: always()
+        run: |
+          podman network create repro-net
+          podman run --rm --network repro-net docker.io/library/alpine:3.20 true
+          podman network rm repro-net
+
+      - name: Repro C - compose over the Docker-compatible API
+        if: always()
+        run: |
+          systemctl --user start podman.socket
+          export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+          mkdir -p /tmp/repro && cd /tmp/repro
+          printf 'services:\n  redis:\n    image: docker.io/library/redis:7-alpine\n' > docker-compose.yml
+          docker compose up -d
+          docker compose down -v
+
+      - name: AppArmor denials in the kernel log
+        if: always()
+        run: sudo dmesg | grep 'apparmor="DENIED"' || echo 'no denials'
