@@ -39,3 +39,28 @@ jobs:
       - name: AppArmor denials in the kernel log
         if: always()
         run: sudo dmesg | grep 'apparmor="DENIED"' || echo 'no denials'
+
+  workaround:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Allow podman to send SIGTERM to pasta
+        run: |
+          sudo sed -i '$ i\  signal (receive) set=(term) peer=podman,' /etc/apparmor.d/usr.bin.pasta
+          sudo apparmor_parser -r /etc/apparmor.d/usr.bin.pasta
+
+      - name: Repro A - rootless netns teardown
+        run: podman unshare --rootless-netns true
+
+      - name: Repro C - compose over the Docker-compatible API
+        if: always()
+        run: |
+          systemctl --user start podman.socket
+          export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+          mkdir -p /tmp/repro && cd /tmp/repro
+          printf 'services:\n  redis:\n    image: docker.io/library/redis:7-alpine\n' > docker-compose.yml
+          docker compose up -d
+          docker compose down -v
+
+      - name: pasta denials in the kernel log
+        if: always()
+        run: sudo dmesg | grep 'apparmor="DENIED"' | grep pasta || echo 'no pasta denials'
